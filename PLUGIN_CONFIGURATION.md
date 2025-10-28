@@ -72,7 +72,8 @@
 - **类型**: 字符串数组
 - **默认值**: `[]`
 - **说明**: 额外包含的文件路径，支持绝对路径
-- **特殊功能**: 即使在默认excludePaths中排除的目录（如node_modules），如果添加到includePaths中也会被扫描
+- **优先级**: **高于** excludePaths - 即使路径被excludePaths排除（如node_modules），只要添加到includePaths中就会被扫描
+- **扫描行为**: 对于includePaths中的路径，会完全忽略excludePaths配置，确保它们被完整扫描
 
 #### 示例 - 包含node_modules中的特定包
 
@@ -85,11 +86,26 @@
 }
 ```
 
-### 2. commentPlugin.excludePaths
+#### 在实际项目中配置示例
+
+对于在`cnooc-seller-frontend`项目中使用插件，正确的配置应该是：
+
+```json
+{
+  "commentPlugin.includePaths": [
+    "/Users/shaopingguo/cnooc-seller-frontend/node_modules/@terminus/cnooc-bricks"
+  ],
+  "commentPlugin.excludePaths": [
+    "**/.git/**"
+  ]
+}
+
+### commentPlugin.excludePaths
 
 - **类型**: 字符串数组
 - **默认值**: `["**/node_modules/**", "**/.git/**"]`
 - **说明**: 排除的文件路径，使用glob模式匹配
+- **优先级**: **低于** includePaths - 如果路径同时出现在includePaths和excludePaths中，会被包含扫描
 
 #### 示例 - 添加额外的排除路径
 
@@ -99,7 +115,24 @@
 }
 ```
 
-### 3. commentPlugin.filePatterns
+### commentPlugin.applyExcludeToIncludePaths
+- **类型**: `boolean`
+- **默认值**: `true`
+- **说明**: 控制是否对`includePaths`中指定的路径应用`excludePaths`规则。
+    - 当设置为`true`（默认值）时，`includePaths`中直接指定的路径本身**不会**被排除，但它的子目录和文件将遵循`excludePaths`规则。
+      - 例如：如果`includePaths`包含`/path/to/node_modules/some-package`，即使`excludePaths`中有`**/node_modules/**`，该package目录本身仍会被扫描，但其中的子目录（如`node_modules`）会被排除。
+    - 当设置为`false`时，`includePaths`中的路径及其所有子目录将完全不受`excludePaths`规则的影响，确保它们始终被扫描。
+- **示例**:
+  ```json
+  {
+    "commentPlugin.includePaths": ["/path/to/node_modules/some-package"],
+    "commentPlugin.excludePaths": ["**/test/**"],
+    "commentPlugin.applyExcludeToIncludePaths": true
+  }
+  ```
+  在这个示例中，虽然`some-package`目录在`includePaths`中，但如果其中包含`test`子目录，那么这些`test`子目录将不会被扫描（因为它们匹配`excludePaths`中的模式）。
+
+### commentPlugin.filePatterns
 
 - **类型**: 字符串数组
 - **默认值**: `["**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx"]`

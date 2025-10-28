@@ -9,5 +9,19 @@
         "dist": true // set this to false to include "dist" folder in search results
     },
     // Turn off tsc task auto detection since we have the necessary tasks as npm scripts
-    "typescript.tsc.autoDetect": "off"
+    "typescript.tsc.autoDetect": "off",
+    
+    // Comment Plugin 配置
+    "commentPlugin.includePaths": [
+        "/Users/shaopingguo/cnooc-seller-frontend/node_modules/@terminus/cnooc-bricks"
+    ],
+    "commentPlugin.excludePaths": [
+        "**/.git/**"
+    ],
+    "commentPlugin.filePatterns": [
+        "**/*.js",
+        "**/*.ts",
+        "**/*.jsx",
+        "**/*.tsx"
+    ]
 }

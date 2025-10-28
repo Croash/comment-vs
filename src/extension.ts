@@ -36,6 +36,8 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 		const includePaths = config.get<string[]>('includePaths', []);
 		const excludePaths = config.get<string[]>('excludePaths', ['**/node_modules/**', '**/.git/**']);
 		const filePatterns = config.get<string[]>('filePatterns', ['**/*.js', '**/*.ts', '**/*.jsx', '**/*.tsx']);
+		// 新增配置：控制includePaths是否遵循excludePaths规则
+		const applyExcludeToIncludePaths = config.get<boolean>('applyExcludeToIncludePaths', true);
 
 		// 预编译正则表达式以提高性能
 		const compiledExcludeRegexes = excludePaths.map(path => this.wildcardToRegex(path));
@@ -47,9 +49,20 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 		});
 
 		// 扫描额外包含的路径
+		console.log(`开始扫描includePaths，共${includePaths.length}个路径`);
 		includePaths.forEach(includePath => {
 			if (fs.existsSync(includePath)) {
-				this.scanFolderWithProgress(includePath, compiledExcludeRegexes, compiledPatternRegexes, progress);
+				console.log(`扫描includePath: ${includePath}`);
+				
+				if (applyExcludeToIncludePaths) {
+					// 创建一个修改版的扫描方法，确保includePath本身不会被排除
+					this.scanIncludedPathWithExclusions(includePath, compiledExcludeRegexes, compiledPatternRegexes, progress);
+				} else {
+					// 不应用排除规则
+					this.scanFolderWithProgress(includePath, [], compiledPatternRegexes, progress);
+				}
+			} else {
+				console.warn(`includePath不存在: ${includePath}`);
 			}
 		});
 	}
@@ -131,6 +144,63 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 		return Promise.resolve([]);
 	}
 
+	// 为includePath专门设计的扫描方法，确保指定的路径本身不会被排除，但它的子目录会遵循排除规则
+	private scanIncludedPathWithExclusions(folderPath: string, excludeRegexes: RegExp[], patternRegexes: RegExp[], progress: vscode.Progress<{message?: string; increment?: number}>): void {
+		console.log(`进入includePath: ${folderPath}`);
+		// 检查扫描是否超时
+		if (Date.now() - this.scanStartTime > this.SCAN_TIMEOUT) {
+			console.warn('扫描超时，已停止扫描');
+			return;
+		}
+
+		try {
+			const files = fs.readdirSync(folderPath);
+			let processed = 0;
+
+			files.forEach(file => {
+				// 再次检查超时
+				if (Date.now() - this.scanStartTime > this.SCAN_TIMEOUT) {
+					return;
+				}
+
+				const filePath = path.join(folderPath, file);
+				try {
+					const stats = fs.statSync(filePath);
+					// 对文件和子目录应用排除规则
+					if (excludeRegexes.some(regex => regex.test(filePath))) {
+						return;
+					}
+					console.log('check_filePath', filePath, stats.isFile());
+					if (stats.isDirectory()) {
+						// 只扫描合理数量的子目录，避免过深递归
+						const depth = filePath.split(path.sep).length - folderPath.split(path.sep).length;
+						if (depth < 10) { // 限制最大递归深度
+							this.scanFolderWithProgress(filePath, excludeRegexes, patternRegexes, progress);
+						}
+					} else if (stats.isFile() && stats.size < 1024 * 1024) { // 跳过大于1MB的文件
+						// 检查文件模式
+						
+						if (patternRegexes.some(regex => regex.test(filePath))) {
+							this.scanFile(filePath);
+						}
+					}
+				} catch (error) {
+					// 忽略单个文件的错误，继续扫描
+					console.log('singleError', error);
+				}
+
+				// 更新进度
+				processed++;
+				if (processed % 100 === 0) {
+					progress.report({ message: `扫描中: ${path.basename(filePath)}`, increment: 1 });
+				}
+			});
+		} catch (error) {
+			console.error(`扫描文件夹失败: ${folderPath}`, error);
+			// 继续扫描其他文件夹
+		}
+	}
+
 	// 带进度显示的扫描文件夹方法
 	private scanFolderWithProgress(folderPath: string, excludeRegexes: RegExp[], patternRegexes: RegExp[], progress: vscode.Progress<{message?: string; increment?: number}>): void {
 		// 检查扫描是否超时
@@ -141,7 +211,9 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 
 		try {
 			// 快速检查是否应该排除该文件夹
-			if (excludeRegexes.some(regex => regex.test(folderPath))) {
+			// 如果excludeRegexes为空数组，则表示不排除任何内容（用于includePaths）
+			if (excludeRegexes.length > 0 && excludeRegexes.some(regex => regex.test(folderPath))) {
+				console.log(`文件夹被排除: ${folderPath}`);
 				return;
 			}
 
@@ -233,7 +305,7 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 			const commentPluginRegex = /\/\/\s*comment_plugin\s+add\s*([^\n]*)/;
 			// 用于匹配下一行可能的变量声明（enum, const, function, class等）
 			const variableDeclarationRegex = /^(?:enum|const|let|var|function|class)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/;
-
+			// console.log('filePath', filePath);
 			lines.forEach((line, index) => {
 				const match = line.match(commentPluginRegex);
 				if (match) {
