@@ -7,13 +7,14 @@ import * as path from 'path';
 // 定义脚本项接口
 interface ScriptItem {
 	label: string;
+	variableName: string;
 	description: string;
 	filePath: string;
 	lineNumber: number;
 }
 
 // 树形视图提供程序类
-class ScriptPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeItem> {
+class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeItem> {
 
 	private _onDidChangeTreeData: vscode.EventEmitter<ScriptTreeItem | undefined | void> = new vscode.EventEmitter<ScriptTreeItem | undefined | void>();
 	readonly onDidChangeTreeData: vscode.Event<ScriptTreeItem | undefined | void> = this._onDidChangeTreeData.event;
@@ -22,7 +23,7 @@ class ScriptPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeItem
 
 	// 刷新树形视图
 	refresh(): void {
-		this.scanScripts();
+		this.scanComments();
 		this._onDidChangeTreeData.fire();
 	}
 
@@ -37,6 +38,7 @@ class ScriptPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeItem
 			// 根节点，返回所有脚本项
 			return Promise.resolve(this.scriptItems.map(item => new ScriptTreeItem(
 				item.label,
+				item.variableName,
 				item.description,
 				item.filePath,
 				item.lineNumber,
@@ -46,15 +48,15 @@ class ScriptPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeItem
 		return Promise.resolve([]);
 	}
 
-	// 扫描所有脚本
-	private scanScripts(): void {
+	// 扫描所有注释
+	private scanComments(): void {
 		this.scriptItems = [];
 		const workspaceFolders = vscode.workspace.workspaceFolders;
 		if (!workspaceFolders) {
 			return;
 		}
 
-		const config = vscode.workspace.getConfiguration('scriptPlugin');
+		const config = vscode.workspace.getConfiguration('commentPlugin');
 		const includePaths = config.get<string[]>('includePaths', []);
 		const excludePaths = config.get<string[]>('excludePaths', ['**/node_modules/**', '**/.git/**']);
 		const filePatterns = config.get<string[]>('filePatterns', ['**/*.js', '**/*.ts', '**/*.jsx', '**/*.tsx']);
@@ -126,14 +128,28 @@ class ScriptPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeItem
 		try {
 			const content = fs.readFileSync(filePath, 'utf8');
 			const lines = content.split('\n');
-			const scriptPluginRegex = /\/\/\s*script_plugin\s+add\s+([^\n]+)/;
+			const commentPluginRegex = /\/\/\s*comment_plugin\s+add\s*([^\n]*)/;
+			// 用于匹配下一行可能的变量声明（enum, const, function, class等）
+			const variableDeclarationRegex = /^(?:enum|const|let|var|function|class)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/;
 
 			lines.forEach((line, index) => {
-				const match = line.match(scriptPluginRegex);
-				if (match && match[1]) {
-					const label = match[1].trim();
+				const match = line.match(commentPluginRegex);
+				if (match) {
+					const label = match[1]?.trim() || '未命名脚本';
+					let variableName = label;
+					
+					// 尝试从下一行提取实际的变量名
+					if (index + 1 < lines.length) {
+						const nextLine = lines[index + 1].trim();
+						const varMatch = nextLine.match(variableDeclarationRegex);
+						if (varMatch && varMatch[1]) {
+							variableName = varMatch[1];
+						}
+					}
+					
 					this.scriptItems.push({
 						label,
+						variableName,
 						description: path.basename(filePath),
 						filePath,
 						lineNumber: index + 1
@@ -170,6 +186,7 @@ class ScriptTreeItem extends vscode.TreeItem {
 
 	constructor(
 		public readonly label: string,
+		public readonly variableName: string,
 		public readonly description: string,
 		public readonly filePath: string,
 		public readonly lineNumber: number,
@@ -190,7 +207,7 @@ class ScriptTreeItem extends vscode.TreeItem {
 }
 
 // 全局视图提供程序实例
-let scriptPluginViewProvider: ScriptPluginViewProvider;
+let commentPluginViewProvider: CommentPluginViewProvider;
 
 // This method is called when your extension is activated
 export function activate(context: vscode.ExtensionContext) {
@@ -198,21 +215,25 @@ export function activate(context: vscode.ExtensionContext) {
 	console.log('恭喜，您的扩展 "comment-vs" 已激活！');
 
 	// 创建视图提供程序
-	scriptPluginViewProvider = new ScriptPluginViewProvider();
+	commentPluginViewProvider = new CommentPluginViewProvider();
 
 	// 注册树形视图
-	vscode.window.registerTreeDataProvider('scriptPluginView', scriptPluginViewProvider);
+	vscode.window.registerTreeDataProvider('commentPluginView', commentPluginViewProvider);
 
 	// 注册刷新命令
-	context.subscriptions.push(vscode.commands.registerCommand('scriptPlugin.refresh', () => {
-		scriptPluginViewProvider.refresh();
+	context.subscriptions.push(vscode.commands.registerCommand('commentPlugin.refresh', () => {
+		commentPluginViewProvider.refresh();
 	}));
 
 	// 注册复制导入路径命令
-	context.subscriptions.push(vscode.commands.registerCommand('scriptPlugin.copyImport', (item: ScriptTreeItem) => {
-		const importPath = scriptPluginViewProvider.getRelativeImportPath(item.filePath);
-		vscode.env.clipboard.writeText(importPath).then(() => {
-			vscode.window.showInformationMessage(`已复制导入路径: ${importPath}`);
+	context.subscriptions.push(vscode.commands.registerCommand('commentPlugin.copyImport', (item: ScriptTreeItem) => {
+		const importPath = commentPluginViewProvider.getRelativeImportPath(item.filePath);
+		// 使用实际的变量名作为导入名称
+		const importName = item.variableName;
+		// 构建完整的import语句
+		const fullImportStatement = `import { ${importName} } from "${importPath}"`;
+		vscode.env.clipboard.writeText(fullImportStatement).then(() => {
+			vscode.window.showInformationMessage(`已复制导入语句: ${fullImportStatement}`);
 		});
 	}));
 
@@ -222,11 +243,11 @@ export function activate(context: vscode.ExtensionContext) {
 	}));
 
 	// 初始扫描
-	scriptPluginViewProvider.refresh();
+	commentPluginViewProvider.refresh();
 
 	// 监听文件保存事件，自动刷新
 	context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(() => {
-		scriptPluginViewProvider.refresh();
+		commentPluginViewProvider.refresh();
 	}));
 }
 

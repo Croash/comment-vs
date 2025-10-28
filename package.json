@@ -10,7 +10,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onView:scriptPluginView"
+    "onView:commentPluginView"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -20,7 +20,7 @@
         "title": "Hello World"
       },
       {
-        "command": "scriptPlugin.copyImport",
+        "command": "commentPlugin.copyImport",
         "title": "复制引入路径",
         "icon": {
           "light": "${defaultLight}",
@@ -28,7 +28,7 @@
         }
       },
       {
-        "command": "scriptPlugin.refresh",
+        "command": "commentPlugin.refresh",
         "title": "刷新",
         "icon": {
           "light": "${light}",
@@ -39,25 +39,25 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "script-plugin-explorer",
-          "title": "脚本插件",
+          "id": "comment-plugin-explorer",
+          "title": "注释插件",
           "icon": "media/icon.svg"
         }
       ]
     },
     "views": {
-      "script-plugin-explorer": [
+      "comment-plugin-explorer": [
         {
-          "id": "scriptPluginView",
-          "name": "脚本列表"
+          "id": "commentPluginView",
+          "name": "注释列表"
         }
       ]
     },
     "menus": {
       "view/title": [
         {
-          "command": "scriptPlugin.refresh",
-          "when": "view == scriptPluginView",
+          "command": "commentPlugin.refresh",
+          "when": "view == commentPluginView",
           "group": "navigation",
           "icon": {
             "light": "${viewContainerToolbarRefresh}",
@@ -67,25 +67,25 @@
       ],
       "view/item/context": [
         {
-          "command": "scriptPlugin.copyImport",
-          "when": "view == scriptPluginView && viewItem == scriptItem"
+          "command": "commentPlugin.copyImport",
+          "when": "view == commentPluginView && viewItem == scriptItem"
         }
       ]
     },
     "configuration": {
-      "title": "Script Plugin",
+      "title": "Comment Plugin",
       "properties": {
-        "scriptPlugin.includePaths": {
+        "commentPlugin.includePaths": {
           "type": "array",
           "default": [],
           "description": "额外包含的文件路径，支持node_modules或其他项目"
         },
-        "scriptPlugin.excludePaths": {
+        "commentPlugin.excludePaths": {
           "type": "array",
           "default": ["**/node_modules/**", "**/.git/**"],
           "description": "排除的文件路径"
         },
-        "scriptPlugin.filePatterns": {
+        "commentPlugin.filePatterns": {
           "type": "array",
           "default": ["**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx"],
           "description": "要扫描的文件模式"
