@@ -30,10 +30,7 @@
       {
         "command": "commentPlugin.refresh",
         "title": "刷新",
-        "icon": {
-          "light": "${light}",
-          "dark": "${dark}"
-        }
+        "icon": "media/refresh.svg"
       }
     ],
     "viewsContainers": {
@@ -58,11 +55,8 @@
         {
           "command": "commentPlugin.refresh",
           "when": "view == commentPluginView",
-          "group": "navigation",
-          "icon": {
-            "light": "${viewContainerToolbarRefresh}",
-            "dark": "${viewContainerToolbarRefresh}"
-          }
+          "group": "navigation@1",
+          "icon": "media/refresh.svg"
         }
       ],
       "view/item/context": [

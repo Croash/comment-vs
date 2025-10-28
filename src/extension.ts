@@ -20,11 +20,94 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 	readonly onDidChangeTreeData: vscode.Event<ScriptTreeItem | undefined | void> = this._onDidChangeTreeData.event;
 
 	private scriptItems: ScriptItem[] = [];
+	private scanStartTime: number = 0;
+	private readonly SCAN_TIMEOUT: number = 30000; // 30秒超时
+	private isScanning: boolean = false;
+
+	// 扫描所有注释
+	private scanComments(progress: vscode.Progress<{message?: string; increment?: number}>): void {
+		this.scriptItems = [];
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (!workspaceFolders) {
+			return;
+		}
+
+		const config = vscode.workspace.getConfiguration('commentPlugin');
+		const includePaths = config.get<string[]>('includePaths', []);
+		const excludePaths = config.get<string[]>('excludePaths', ['**/node_modules/**', '**/.git/**']);
+		const filePatterns = config.get<string[]>('filePatterns', ['**/*.js', '**/*.ts', '**/*.jsx', '**/*.tsx']);
+
+		// 预编译正则表达式以提高性能
+		const compiledExcludeRegexes = excludePaths.map(path => this.wildcardToRegex(path));
+		const compiledPatternRegexes = filePatterns.map(pattern => this.wildcardToRegex(pattern));
+
+		// 扫描工作区文件
+		workspaceFolders.forEach(folder => {
+			this.scanFolderWithProgress(folder.uri.fsPath, compiledExcludeRegexes, compiledPatternRegexes, progress);
+		});
+
+		// 扫描额外包含的路径
+		includePaths.forEach(includePath => {
+			if (fs.existsSync(includePath)) {
+				this.scanFolderWithProgress(includePath, compiledExcludeRegexes, compiledPatternRegexes, progress);
+			}
+		});
+	}
 
 	// 刷新树形视图
 	refresh(): void {
-		this.scanComments();
-		this._onDidChangeTreeData.fire();
+		// 防止重复扫描
+		if (this.isScanning) {
+			vscode.window.showInformationMessage('扫描正在进行中，请稍后再试');
+			return;
+		}
+		
+		this.isScanning = true;
+		this.scanStartTime = Date.now();
+		
+		vscode.window.withProgress({
+			location: vscode.ProgressLocation.Notification,
+			title: "注释插件正在扫描文件...",
+			cancellable: true
+		}, (progress, token) => {
+			// 添加超时检测定时器
+			const timeoutTimer = setTimeout(() => {
+				console.warn('扫描超时，已中断扫描');
+				vscode.window.showWarningMessage('扫描超时，可能因项目过大或配置不当导致，请尝试调整excludePaths配置后重新扫描');
+			}, this.SCAN_TIMEOUT);
+
+			token.onCancellationRequested(() => {
+				clearTimeout(timeoutTimer); // 清除超时定时器
+				this.isScanning = false;
+				console.log('扫描已取消');
+			});
+
+			return new Promise<void>((resolve) => {
+				try {
+					this.scanComments(progress);
+					clearTimeout(timeoutTimer); // 清除超时定时器
+
+					const scanTime = Date.now() - this.scanStartTime;
+					console.log(`扫描完成，共扫描到 ${this.scriptItems.length} 个注释，耗时 ${scanTime}ms`);
+					
+					// 性能统计和提示
+					if (scanTime > 10000) { // 如果扫描时间超过10秒
+						vscode.window.showInformationMessage(`扫描完成，共找到 ${this.scriptItems.length} 个注释项，耗时 ${Math.round(scanTime/1000)}秒。提示：可以通过适当配置excludePaths来提高扫描速度。`);
+					} else {
+						// 对于快速扫描，也给予反馈
+						vscode.window.showInformationMessage(`扫描完成，共找到 ${this.scriptItems.length} 个注释项`);
+					}
+				} catch (error) {
+					clearTimeout(timeoutTimer); // 清除超时定时器
+					console.error('扫描过程中出错:', error);
+					vscode.window.showErrorMessage('扫描过程中出错，请查看开发者控制台获取详细信息');
+				} finally {
+					this.isScanning = false;
+					this._onDidChangeTreeData.fire();
+					resolve();
+				}
+			});
+		});
 	}
 
 	// 获取树项
@@ -48,54 +131,73 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 		return Promise.resolve([]);
 	}
 
-	// 扫描所有注释
-	private scanComments(): void {
-		this.scriptItems = [];
-		const workspaceFolders = vscode.workspace.workspaceFolders;
-		if (!workspaceFolders) {
+	// 带进度显示的扫描文件夹方法
+	private scanFolderWithProgress(folderPath: string, excludeRegexes: RegExp[], patternRegexes: RegExp[], progress: vscode.Progress<{message?: string; increment?: number}>): void {
+		// 检查扫描是否超时
+		if (Date.now() - this.scanStartTime > this.SCAN_TIMEOUT) {
+			console.warn('扫描超时，已停止扫描');
 			return;
 		}
 
-		const config = vscode.workspace.getConfiguration('commentPlugin');
-		const includePaths = config.get<string[]>('includePaths', []);
-		const excludePaths = config.get<string[]>('excludePaths', ['**/node_modules/**', '**/.git/**']);
-		const filePatterns = config.get<string[]>('filePatterns', ['**/*.js', '**/*.ts', '**/*.jsx', '**/*.tsx']);
-
-		// 扫描工作区文件
-		workspaceFolders.forEach(folder => {
-			this.scanFolder(folder.uri.fsPath, excludePaths, filePatterns);
-		});
-
-		// 扫描额外包含的路径
-		includePaths.forEach(includePath => {
-			if (fs.existsSync(includePath)) {
-				this.scanFolder(includePath, [], filePatterns);
-			}
-		});
-	}
-
-	// 扫描文件夹
-	private scanFolder(folderPath: string, excludePaths: string[], filePatterns: string[]): void {
 		try {
-			const files = fs.readdirSync(folderPath);
-			files.forEach(file => {
-				const filePath = path.join(folderPath, file);
-				const stats = fs.statSync(filePath);
+			// 快速检查是否应该排除该文件夹
+			if (excludeRegexes.some(regex => regex.test(folderPath))) {
+				return;
+			}
 
-				// 检查是否应该排除
-				if (this.shouldExclude(filePath, excludePaths)) {
+			const files = fs.readdirSync(folderPath);
+			let processed = 0;
+
+			files.forEach(file => {
+				// 再次检查超时
+				if (Date.now() - this.scanStartTime > this.SCAN_TIMEOUT) {
 					return;
 				}
 
-				if (stats.isDirectory()) {
-					this.scanFolder(filePath, excludePaths, filePatterns);
-				} else if (stats.isFile() && this.matchesPattern(filePath, filePatterns)) {
-					this.scanFile(filePath);
+				const filePath = path.join(folderPath, file);
+				try {
+					const stats = fs.statSync(filePath);
+
+					// 检查是否应该排除
+					if (excludeRegexes.some(regex => regex.test(filePath))) {
+						return;
+					}
+
+					if (stats.isDirectory()) {
+						// 只扫描合理数量的子目录，避免过深递归
+						const depth = filePath.split(path.sep).length - folderPath.split(path.sep).length;
+						if (depth < 10) { // 限制最大递归深度
+							this.scanFolderWithProgress(filePath, excludeRegexes, patternRegexes, progress);
+						}
+					} else if (stats.isFile() && stats.size < 1024 * 1024) { // 跳过大于1MB的文件
+						// 检查文件模式
+						if (patternRegexes.some(regex => regex.test(filePath))) {
+							this.scanFile(filePath);
+						}
+					}
+				} catch (error) {
+					// 忽略单个文件的错误，继续扫描
+				}
+
+				// 更新进度
+				processed++;
+				if (processed % 100 === 0) {
+					progress.report({ message: `扫描中: ${path.basename(filePath)}`, increment: 1 });
 				}
 			});
 		} catch (error) {
-			console.error('扫描文件夹失败:', error);
+			console.error(`扫描文件夹失败: ${folderPath}`, error);
+			// 继续扫描其他文件夹
 		}
+	}
+
+	// 扫描文件夹（保留用于兼容，实际使用scanFolderWithProgress）
+	private scanFolder(folderPath: string, excludePaths: string[], filePatterns: string[]): void {
+		const excludeRegexes = excludePaths.map(path => this.wildcardToRegex(path));
+		const patternRegexes = filePatterns.map(pattern => this.wildcardToRegex(pattern));
+		this.scanFolderWithProgress(folderPath, excludeRegexes, patternRegexes, {
+			report: () => {}
+		});
 	}
 
 	// 检查是否应该排除
@@ -208,6 +310,7 @@ class ScriptTreeItem extends vscode.TreeItem {
 
 // 全局视图提供程序实例
 let commentPluginViewProvider: CommentPluginViewProvider;
+let commentPluginTreeView: vscode.TreeView<ScriptTreeItem>;
 
 // This method is called when your extension is activated
 export function activate(context: vscode.ExtensionContext) {
@@ -217,13 +320,20 @@ export function activate(context: vscode.ExtensionContext) {
 	// 创建视图提供程序
 	commentPluginViewProvider = new CommentPluginViewProvider();
 
-	// 注册树形视图
-	vscode.window.registerTreeDataProvider('commentPluginView', commentPluginViewProvider);
-
-	// 注册刷新命令
+	// 先注册刷新命令
 	context.subscriptions.push(vscode.commands.registerCommand('commentPlugin.refresh', () => {
+		console.log('刷新命令被调用');
 		commentPluginViewProvider.refresh();
 	}));
+
+	// 再创建树形视图
+	commentPluginTreeView = vscode.window.createTreeView('commentPluginView', {
+		treeDataProvider: commentPluginViewProvider,
+		showCollapseAll: true
+	});
+
+	// 调试：检查视图是否正确创建
+	console.log('树形视图已创建:', commentPluginTreeView);
 
 	// 注册复制导入路径命令
 	context.subscriptions.push(vscode.commands.registerCommand('commentPlugin.copyImport', (item: ScriptTreeItem) => {
@@ -244,11 +354,6 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// 初始扫描
 	commentPluginViewProvider.refresh();
-
-	// 监听文件保存事件，自动刷新
-	context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(() => {
-		commentPluginViewProvider.refresh();
-	}));
 }
 
 // This method is called when your extension is deactivated
