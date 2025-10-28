@@ -58,7 +58,11 @@
         {
           "command": "scriptPlugin.refresh",
           "when": "view == scriptPluginView",
-          "group": "navigation"
+          "group": "navigation",
+          "icon": {
+            "light": "${viewContainerToolbarRefresh}",
+            "dark": "${viewContainerToolbarRefresh}"
+          }
         }
       ],
       "view/item/context": [
