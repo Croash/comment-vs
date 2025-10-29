@@ -76,13 +76,23 @@
         },
         "commentPlugin.excludePaths": {
           "type": "array",
-          "default": ["**/node_modules/**", "**/.git/**"],
+          "default": ["**/node_modules/**", "**/.git/**", "**node_modules**", "**.git**"],
           "description": "排除的文件路径"
         },
         "commentPlugin.filePatterns": {
           "type": "array",
           "default": ["**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx"],
           "description": "要扫描的文件模式"
+        },
+        "commentPlugin.excludedFilenamePatterns": {
+          "type": "array",
+          "default": ["node_modules", ".git"],
+          "description": "直接通过文件名包含检查的排除模式"
+        },
+        "commentPlugin.applyExcludeToIncludePaths": {
+          "type": "boolean",
+          "default": true,
+          "description": "控制includePaths是否遵循excludePaths规则"
         }
       }
     }
