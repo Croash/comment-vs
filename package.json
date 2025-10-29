@@ -2,7 +2,8 @@
   "name": "comment-vs",
   "displayName": "comment-vs",
   "description": "comment-vs",
-  "version": "0.0.1",
+  "publisher": "shaozelin",
+  "version": "1.0.1",
   "engines": {
     "vscode": "^1.105.0"
   },
@@ -109,7 +110,8 @@
     "pretest": "pnpm run compile-tests && pnpm run compile && pnpm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "publish:vscode": "bash scripts/publish-extension.sh"
   },
   "devDependencies": {
     "@types/vscode": "^1.105.0",
