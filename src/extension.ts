@@ -34,16 +34,17 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 
 		const config = vscode.workspace.getConfiguration('commentPlugin');
 		const includePaths = config.get<string[]>('includePaths', []);
-		const excludePaths = config.get<string[]>('excludePaths', ['**/node_modules/**', '**/.git/**']);
+		const excludePaths = config.get<string[]>('excludePaths', ['**/node_modules/**', '**/.git/**', '**node_modules**', '**.git**']);
 		const filePatterns = config.get<string[]>('filePatterns', ['**/*.js', '**/*.ts', '**/*.jsx', '**/*.tsx']);
+		// 新增配置：需要直接通过文件名包含检查的模式
+		const excludedFilenamePatterns = config.get<string[]>('excludedFilenamePatterns', ['node_modules', '.git']);
 		// 新增配置：控制includePaths是否遵循excludePaths规则
 		const applyExcludeToIncludePaths = config.get<boolean>('applyExcludeToIncludePaths', true);
 
 		// 预编译正则表达式以提高性能
 		const compiledExcludeRegexes = excludePaths.map(path => this.wildcardToRegex(path));
 		const compiledPatternRegexes = filePatterns.map(pattern => this.wildcardToRegex(pattern));
-
-		// 扫描工作区文件
+		// 扫描工作区文件 - 使用完整路径进行排除检查
 		workspaceFolders.forEach(folder => {
 			this.scanFolderWithProgress(folder.uri.fsPath, compiledExcludeRegexes, compiledPatternRegexes, progress);
 		});
@@ -56,9 +57,9 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 				
 				if (applyExcludeToIncludePaths) {
 					// 创建一个修改版的扫描方法，确保includePath本身不会被排除
-					this.scanIncludedPathWithExclusions(includePath, compiledExcludeRegexes, compiledPatternRegexes, progress);
+					this.scanIncludedPathWithExclusions(includePath, compiledExcludeRegexes, compiledPatternRegexes, progress, excludedFilenamePatterns);
 				} else {
-					// 不应用排除规则
+					// 不应用排除规则 - 使用完整路径
 					this.scanFolderWithProgress(includePath, [], compiledPatternRegexes, progress);
 				}
 			} else {
@@ -145,7 +146,7 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 	}
 
 	// 为includePath专门设计的扫描方法，确保指定的路径本身不会被排除，但它的子目录会遵循排除规则
-	private scanIncludedPathWithExclusions(folderPath: string, excludeRegexes: RegExp[], patternRegexes: RegExp[], progress: vscode.Progress<{message?: string; increment?: number}>): void {
+	private scanIncludedPathWithExclusions(folderPath: string, excludeRegexes: RegExp[], patternRegexes: RegExp[], progress: vscode.Progress<{message?: string; increment?: number}>, excludedFilenamePatterns: string[]): void {
 		console.log(`进入includePath: ${folderPath}`);
 		// 检查扫描是否超时
 		if (Date.now() - this.scanStartTime > this.SCAN_TIMEOUT) {
@@ -162,20 +163,25 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 				if (Date.now() - this.scanStartTime > this.SCAN_TIMEOUT) {
 					return;
 				}
-
 				const filePath = path.join(folderPath, file);
 				try {
 					const stats = fs.statSync(filePath);
-					// 对文件和子目录应用排除规则
-					if (excludeRegexes.some(regex => regex.test(filePath))) {
+					// 对文件和子目录应用排除规则，但只排除子目录中的node_modules等，不排除includePath本身
+					// 对于includePath下的文件和目录，使用相对路径和文件名进行排除检查
+					const relativePath = path.relative(folderPath, filePath);
+					// 1. 检查文件名是否包含配置中定义的排除模式
+					// 2. 检查相对路径是否匹配排除规则
+					if (excludedFilenamePatterns.some(pattern => file.includes(pattern)) || 
+					    excludeRegexes.some(regex => regex.test(relativePath))) {
 						return;
 					}
-					console.log('check_filePath', filePath, stats.isFile());
+
 					if (stats.isDirectory()) {
 						// 只扫描合理数量的子目录，避免过深递归
 						const depth = filePath.split(path.sep).length - folderPath.split(path.sep).length;
 						if (depth < 10) { // 限制最大递归深度
-							this.scanFolderWithProgress(filePath, excludeRegexes, patternRegexes, progress);
+							// 对于includePaths扫描，传递folderPath作为basePath以使用相对路径进行排除检查
+							this.scanFolderWithProgress(filePath, excludeRegexes, patternRegexes, progress, folderPath);
 						}
 					} else if (stats.isFile() && stats.size < 1024 * 1024) { // 跳过大于1MB的文件
 						// 检查文件模式
@@ -202,7 +208,7 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 	}
 
 	// 带进度显示的扫描文件夹方法
-	private scanFolderWithProgress(folderPath: string, excludeRegexes: RegExp[], patternRegexes: RegExp[], progress: vscode.Progress<{message?: string; increment?: number}>): void {
+	private scanFolderWithProgress(folderPath: string, excludeRegexes: RegExp[], patternRegexes: RegExp[], progress: vscode.Progress<{ message?: string; increment?: number }>, basePath?: string): void {
 		// 检查扫描是否超时
 		if (Date.now() - this.scanStartTime > this.SCAN_TIMEOUT) {
 			console.warn('扫描超时，已停止扫描');
@@ -211,9 +217,12 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 
 		try {
 			// 快速检查是否应该排除该文件夹
-			// 如果excludeRegexes为空数组，则表示不排除任何内容（用于includePaths）
-			if (excludeRegexes.length > 0 && excludeRegexes.some(regex => regex.test(folderPath))) {
-				console.log(`文件夹被排除: ${folderPath}`);
+			// 如果excludeRegexes为空数组，则表示不排除任何内容
+			// 如果提供了basePath（来自scanIncludedPathWithExclusions），则使用相对路径进行排除检查
+			const pathToTest = basePath ? path.relative(basePath, folderPath) : folderPath;
+
+			if (excludeRegexes.length > 0 && excludeRegexes.some(regex => regex.test(pathToTest))) {
+				console.log(`文件夹被排除: ${folderPath}, 测试路径: ${pathToTest}`);
 				return;
 			}
 
@@ -229,17 +238,19 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 				const filePath = path.join(folderPath, file);
 				try {
 					const stats = fs.statSync(filePath);
-
 					// 检查是否应该排除
-					if (excludeRegexes.some(regex => regex.test(filePath))) {
-						return;
-					}
+				const fileToTest = basePath ? path.relative(basePath, filePath) : filePath;
+				if (excludeRegexes.some(regex => regex.test(fileToTest))) {
+					console.log(`文件被排除: ${filePath}, 测试路径: ${fileToTest}`);
+					return;
+				}
 
 					if (stats.isDirectory()) {
 						// 只扫描合理数量的子目录，避免过深递归
 						const depth = filePath.split(path.sep).length - folderPath.split(path.sep).length;
 						if (depth < 10) { // 限制最大递归深度
-							this.scanFolderWithProgress(filePath, excludeRegexes, patternRegexes, progress);
+							// 递归调用时保持相同的basePath参数，确保只有在scanIncludedPathWithExclusions调用链中才使用相对路径
+							this.scanFolderWithProgress(filePath, excludeRegexes, patternRegexes, progress, basePath);
 						}
 					} else if (stats.isFile() && stats.size < 1024 * 1024) { // 跳过大于1MB的文件
 						// 检查文件模式
@@ -305,7 +316,6 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 			const commentPluginRegex = /\/\/\s*comment_plugin\s+add\s*([^\n]*)/;
 			// 用于匹配下一行可能的变量声明（enum, const, function, class等）
 			const variableDeclarationRegex = /^(?:enum|const|let|var|function|class)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/;
-			// console.log('filePath', filePath);
 			lines.forEach((line, index) => {
 				const match = line.match(commentPluginRegex);
 				if (match) {
