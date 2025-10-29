@@ -52,18 +52,26 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 		// 扫描额外包含的路径
 		console.log(`开始扫描includePaths，共${includePaths.length}个路径`);
 		includePaths.forEach(includePath => {
-			if (fs.existsSync(includePath)) {
-				console.log(`扫描includePath: ${includePath}`);
+			// 支持相对路径，相对于工作区根目录
+			let resolvedPath = includePath;
+			// 如果不是绝对路径，则尝试相对于工作区根目录解析
+			if (!path.isAbsolute(includePath) && workspaceFolders.length > 0) {
+				resolvedPath = path.join(workspaceFolders[0].uri.fsPath, includePath);
+				console.log(`相对路径解析为: ${resolvedPath}`);
+			}
+			
+			if (fs.existsSync(resolvedPath)) {
+				console.log(`扫描includePath: ${resolvedPath}`);
 				
 				if (applyExcludeToIncludePaths) {
 					// 创建一个修改版的扫描方法，确保includePath本身不会被排除
-					this.scanIncludedPathWithExclusions(includePath, compiledExcludeRegexes, compiledPatternRegexes, progress, excludedFilenamePatterns);
+					this.scanIncludedPathWithExclusions(resolvedPath, compiledExcludeRegexes, compiledPatternRegexes, progress, excludedFilenamePatterns);
 				} else {
 					// 不应用排除规则 - 使用完整路径
-					this.scanFolderWithProgress(includePath, [], compiledPatternRegexes, progress);
+					this.scanFolderWithProgress(resolvedPath, [], compiledPatternRegexes, progress);
 				}
 			} else {
-				console.warn(`includePath不存在: ${includePath}`);
+				console.warn(`includePath不存在: ${resolvedPath}`);
 			}
 		});
 	}
