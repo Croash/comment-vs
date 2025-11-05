@@ -11,6 +11,7 @@ interface ScriptItem {
 	description: string;
 	filePath: string;
 	lineNumber: number;
+	type: string; // 添加类型字段，如'enum', 'function'等
 }
 
 // 树形视图提供程序类
@@ -84,6 +85,9 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 			return;
 		}
 		
+		// 清除搜索状态
+		this.clearSearch();
+		
 		this.isScanning = true;
 		this.scanStartTime = Date.now();
 		
@@ -137,20 +141,55 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 		return element;
 	}
 
+	// 搜索过滤文本
+	private _searchFilter: string = '';
+
+	// 设置搜索过滤
+	setSearchFilter(filter: string): void {
+		this._searchFilter = filter.toLowerCase();
+		this._onDidChangeTreeData.fire();
+	}
+
+	// 获取当前搜索状态
+	isSearching(): boolean {
+		return this._searchFilter !== '';
+	}
+
+	// 清除搜索
+	clearSearch(): void {
+		this._searchFilter = '';
+		this._onDidChangeTreeData.fire();
+	}
+	
+	// 获取搜索过滤文本（用于保留当前搜索状态）
+	get searchFilter(): string {
+		return this._searchFilter;
+	}
+
 	// 获取子项
 	getChildren(element?: ScriptTreeItem): Thenable<ScriptTreeItem[]> {
-		if (!element) {
-			// 根节点，返回所有脚本项
-			return Promise.resolve(this.scriptItems.map(item => new ScriptTreeItem(
+		// 应用搜索过滤
+		let filteredItems = this.scriptItems;
+		if (this._searchFilter) {
+			filteredItems = this.scriptItems.filter(item => 
+				item.label.toLowerCase().includes(this._searchFilter) || 
+				item.variableName.toLowerCase().includes(this._searchFilter) ||
+				item.description.toLowerCase().includes(this._searchFilter)
+			);
+		}
+
+		// 不再返回分类节点，直接返回所有脚本项
+		return Promise.resolve(
+			filteredItems.map(item => new ScriptTreeItem(
 				item.label,
 				item.variableName,
 				item.description,
 				item.filePath,
 				item.lineNumber,
-				vscode.TreeItemCollapsibleState.None
-			)));
-		}
-		return Promise.resolve([]);
+				vscode.TreeItemCollapsibleState.None,
+				'' // 空类型
+			))
+		);
 	}
 
 	// 为includePath专门设计的扫描方法，确保指定的路径本身不会被排除，但它的子目录会遵循排除规则
@@ -321,12 +360,14 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 		try {
 			const content = fs.readFileSync(filePath, 'utf8');
 			const lines = content.split('\n');
+			// 修改正则表达式，捕获整个注释内容，包括可能的类型标识
 			const commentPluginRegex = /\/\/\s*comment_plugin\s+add\s*([^\n]*)/;
 			// 用于匹配下一行可能的变量声明（enum, const, function, class等）
 			const variableDeclarationRegex = /^(?:enum|const|let|var|function|class)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/;
 			lines.forEach((line, index) => {
 				const match = line.match(commentPluginRegex);
 				if (match) {
+					// 提取完整的注释内容，包括可能的类型标识
 					const label = match[1]?.trim() || '未命名脚本';
 					let variableName = label;
 					
@@ -344,7 +385,8 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 						variableName,
 						description: path.basename(filePath),
 						filePath,
-						lineNumber: index + 1
+						lineNumber: index + 1,
+						type: '' // 空类型字符串
 					});
 				}
 			});
@@ -375,6 +417,7 @@ class CommentPluginViewProvider implements vscode.TreeDataProvider<ScriptTreeIte
 
 // 树形项类
 class ScriptTreeItem extends vscode.TreeItem {
+	public readonly type: string; // 添加类型字段
 
 	constructor(
 		public readonly label: string,
@@ -382,25 +425,61 @@ class ScriptTreeItem extends vscode.TreeItem {
 		public readonly description: string,
 		public readonly filePath: string,
 		public readonly lineNumber: number,
-		public readonly collapsibleState: vscode.TreeItemCollapsibleState
+		public readonly collapsibleState: vscode.TreeItemCollapsibleState,
+		type: string = 'default'
 	) {
 		super(label, collapsibleState);
 		this.tooltip = `${this.filePath}:${this.lineNumber}`;
 		this.description = description;
-		this.contextValue = 'scriptItem';
+		this.contextValue = collapsibleState === vscode.TreeItemCollapsibleState.None ? 'scriptItem' : 'categoryItem';
+		this.type = type;
 
-		// 添加打开文件的命令
-		this.command = {
-			command: 'vscode.open',
-			arguments: [vscode.Uri.file(filePath), { selection: new vscode.Range(lineNumber - 1, 0, lineNumber - 1, 0) }],
-			title: '打开文件'
-		};
+		// 只有叶子节点才添加打开文件的命令
+		if (collapsibleState === vscode.TreeItemCollapsibleState.None) {
+			this.command = {
+				command: 'vscode.open',
+				arguments: [vscode.Uri.file(filePath), { selection: new vscode.Range(lineNumber - 1, 0, lineNumber - 1, 0) }],
+				title: '打开文件'
+			};
+		}
 	}
 }
 
 // 全局视图提供程序实例
 let commentPluginViewProvider: CommentPluginViewProvider;
 let commentPluginTreeView: vscode.TreeView<ScriptTreeItem>;
+// 搜索图标控制器
+let searchIconController: vscode.Disposable;
+
+// 更新搜索图标状态的函数
+function updateSearchIcon() {
+	if (searchIconController) {
+		searchIconController.dispose();
+	}
+
+	// 根据搜索状态选择图标
+	const iconPath = commentPluginViewProvider.isSearching() 
+		? { light: 'media/search-clear.svg', dark: 'media/search-clear.svg' }
+		: { light: 'media/search.svg', dark: 'media/search.svg' };
+
+	// 创建新的图标控制器
+	searchIconController = vscode.commands.registerCommand('commentPlugin.toggleSearch', async () => {
+		// 无论是否在搜索状态，点击图标都显示搜索输入框
+		const currentSearch = commentPluginViewProvider.isSearching() ? commentPluginViewProvider.searchFilter : '';
+		const searchText = await vscode.window.showInputBox({
+			prompt: '输入搜索内容 (留空清除搜索)',
+			placeHolder: '搜索标签、变量名、类型或文件名称',
+			ignoreFocusOut: false, // 设置为false，点击其他地方搜索框会自动消失
+			value: currentSearch // 保留当前搜索文本
+		});
+		
+		// 设置搜索过滤
+		commentPluginViewProvider.setSearchFilter(searchText || '');
+	});
+
+	// 更新视图中的图标
+	vscode.commands.executeCommand('setContext', 'commentPlugin.isSearching', commentPluginViewProvider.isSearching());
+}
 
 // This method is called when your extension is activated
 export function activate(context: vscode.ExtensionContext) {
@@ -415,6 +494,41 @@ export function activate(context: vscode.ExtensionContext) {
 		console.log('刷新命令被调用');
 		commentPluginViewProvider.refresh();
 	}));
+
+	// 注册搜索命令（保持兼容性）
+	context.subscriptions.push(vscode.commands.registerCommand('commentPlugin.search', async () => {
+		const searchText = await vscode.window.showInputBox({
+			prompt: '输入搜索内容 (留空清除搜索)',
+			placeHolder: '搜索标签、变量名、类型或文件名称',
+			ignoreFocusOut: false // 设置为false，点击其他地方搜索框会自动消失
+		});
+		
+		// 设置搜索过滤
+		commentPluginViewProvider.setSearchFilter(searchText || '');
+		// 更新搜索图标
+		updateSearchIcon();
+	}));
+
+	// 注册清除搜索命令
+	context.subscriptions.push(vscode.commands.registerCommand('commentPlugin.clearSearch', () => {
+		commentPluginViewProvider.clearSearch();
+		// 更新搜索图标
+		updateSearchIcon();
+	}));
+
+	// 添加搜索状态变化监听器
+	const originalSetSearchFilter = commentPluginViewProvider.setSearchFilter;
+	commentPluginViewProvider.setSearchFilter = (filter: string) => {
+		originalSetSearchFilter.call(commentPluginViewProvider, filter);
+		updateSearchIcon();
+	};
+
+	// 添加清除搜索的变化监听器
+	const originalClearSearch = commentPluginViewProvider.clearSearch;
+	commentPluginViewProvider.clearSearch = () => {
+		originalClearSearch.call(commentPluginViewProvider);
+		updateSearchIcon();
+	};
 
 	// 再创建树形视图
 	commentPluginTreeView = vscode.window.createTreeView('commentPluginView', {
@@ -441,6 +555,9 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand('comment-vs.helloWorld', () => {
 		vscode.window.showInformationMessage('Hello World from comment-vs!');
 	}));
+
+	// 初始更新搜索图标
+	updateSearchIcon();
 
 	// 初始扫描
 	commentPluginViewProvider.refresh();

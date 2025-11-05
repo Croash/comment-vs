@@ -31,7 +31,26 @@
       {
         "command": "commentPlugin.refresh",
         "title": "刷新",
-        "icon": "media/refresh.svg"
+        "icon": {
+          "light": "media/refresh.svg",
+          "dark": "media/refresh.svg"
+        }
+      },
+      {
+        "command": "commentPlugin.toggleSearch",
+        "title": "搜索/清除搜索",
+        "icon": {
+          "light": "media/search.svg",
+          "dark": "media/search.svg"
+        }
+      },
+      {
+        "command": "commentPlugin.clearSearch",
+        "title": "清除搜索",
+        "icon": {
+          "light": "media/search-clear.svg",
+          "dark": "media/search-clear.svg"
+        }
       }
     ],
     "viewsContainers": {
@@ -39,7 +58,10 @@
         {
           "id": "comment-plugin-explorer",
           "title": "注释插件",
-          "icon": "media/icon.svg"
+          "icon": {
+            "light": "media/icon.svg",
+            "dark": "media/icon.svg"
+          }
         }
       ]
     },
@@ -57,7 +79,19 @@
           "command": "commentPlugin.refresh",
           "when": "view == commentPluginView",
           "group": "navigation@1",
-          "icon": "media/refresh.svg"
+          "icon": {
+            "light": "media/refresh.svg",
+            "dark": "media/refresh.svg"
+          }
+        },
+        {
+          "command": "commentPlugin.toggleSearch",
+          "when": "view == commentPluginView",
+          "group": "navigation@2",
+          "icon": {
+            "light": "media/search.svg",
+            "dark": "media/search.svg"
+          }
         }
       ],
       "view/item/context": [
