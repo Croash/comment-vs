@@ -58,7 +58,10 @@
         {
           "id": "comment-plugin-explorer",
           "title": "注释插件",
-          "icon": "media/icon.svg"
+          "icon": {
+            "light": "media/icon.svg",
+            "dark": "media/icon.svg"
+          }
         }
       ]
     },
